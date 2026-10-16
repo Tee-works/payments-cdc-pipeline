@@ -1,0 +1,57 @@
+image:
+  repository: ghcr.io/tee-works/payments-cdc-pipeline
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# One replica per partition at most. History writes are idempotent, so a
+# rebalance that replays a batch is harmless.
+replicaCount: 1
+
+kafka:
+  bootstrapServers: payments-kafka-bootstrap:9092
+  consumerGroup: payments-cdc-history
+  sourceTopic: gateway.payments.transactions
+  dlqTopic: gateway.dlq.transactions
+
+postgres:
+  host: warehouse-postgres
+  port: 5432
+  database: warehouse
+  # Secret with keys "username" and "password". Terraform creates it.
+  existingSecret: payments-cdc-db
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# Kafka Connect on Kubernetes is usually run by Strimzi. When enabled, this
+# chart creates KafkaConnector resources for the Strimzi KafkaConnect cluster
+# named below. Credentials are read from Kubernetes secrets at runtime through
+# Strimzi's KubernetesSecretConfigProvider, so they never sit in values.
+strimzi:
+  enabled: false
+  connectCluster: payments-connect
+  mysql:
+    host: payments-mysql
+    secretRef: payments-mysql-debezium   # keys: username, password
+  sink:
+    jdbcUrl: jdbc:postgresql://warehouse-postgres:5432/warehouse
+    secretRef: payments-cdc-db            # keys: username, password
+
+# Daily reconciliation as a Kubernetes CronJob, for clusters without Airflow.
+# Same check as airflow/dags/reconcile_payments_cdc.py.
+reconcile:
+  enabled: false
+  schedule: "0 2 * * *"
+  args: ["--yesterday"]
+  retries: 3
+  mysql:
+    host: payments-mysql
+    secretRef: payments-mysql-app   # keys: username, password (read-only is enough)

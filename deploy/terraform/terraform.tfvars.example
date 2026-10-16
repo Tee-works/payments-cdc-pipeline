@@ -1,0 +1,5 @@
+kube_context            = "kind-payments"
+kafka_bootstrap_servers = "payments-kafka-bootstrap.kafka:9092"
+postgres_host           = "warehouse-postgres.data"
+postgres_username       = "warehouse"
+postgres_password       = "change-me"

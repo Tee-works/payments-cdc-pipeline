@@ -1,0 +1,6 @@
+apiVersion: v2
+name: payments-cdc
+description: CDC status-history consumer, plus optional Strimzi KafkaConnector resources for the Debezium source and JDBC sink.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

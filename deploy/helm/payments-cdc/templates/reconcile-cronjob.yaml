@@ -1,0 +1,65 @@
+{{- if .Values.reconcile.enabled }}
+# The same check as the Airflow DAG, for clusters that run without Airflow:
+# compare yesterday's count and amount per status in MySQL and the warehouse.
+# A mismatch exits non-zero, so the Job shows as failed.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "payments-cdc.fullname" . }}-reconcile
+  labels:
+    {{- include "payments-cdc.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.reconcile.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.reconcile.retries }}
+      template:
+        metadata:
+          labels:
+            {{- include "payments-cdc.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: reconcile
+        spec:
+          restartPolicy: Never
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: reconcile
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["python", "-m", "cdc.reconcile"]
+              args: {{ toJson .Values.reconcile.args }}
+              envFrom:
+                - configMapRef:
+                    name: {{ include "payments-cdc.fullname" . }}
+              env:
+                - name: MYSQL_HOST
+                  value: {{ .Values.reconcile.mysql.host | quote }}
+                - name: MYSQL_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.reconcile.mysql.secretRef }}
+                      key: username
+                - name: MYSQL_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.reconcile.mysql.secretRef }}
+                      key: password
+                - name: PG_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.postgres.existingSecret }}
+                      key: username
+                - name: PG_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.postgres.existingSecret }}
+                      key: password
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+{{- end }}

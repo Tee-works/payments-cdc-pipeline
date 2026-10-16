@@ -1,0 +1,51 @@
+{{- if .Values.strimzi.enabled }}
+{{- $ns := .Release.Namespace }}
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata:
+  name: mysql-source
+  labels:
+    strimzi.io/cluster: {{ .Values.strimzi.connectCluster }}
+    {{- include "payments-cdc.labels" . | nindent 4 }}
+spec:
+  class: io.debezium.connector.mysql.MySqlConnector
+  tasksMax: 1
+  config:
+    database.hostname: {{ .Values.strimzi.mysql.host | quote }}
+    database.port: "3306"
+    database.user: "${secrets:{{ $ns }}/{{ .Values.strimzi.mysql.secretRef }}:username}"
+    database.password: "${secrets:{{ $ns }}/{{ .Values.strimzi.mysql.secretRef }}:password}"
+    database.server.id: "184054"
+    topic.prefix: gateway
+    database.include.list: payments
+    table.include.list: payments.merchants,payments.transactions,payments.refunds
+    schema.history.internal.kafka.bootstrap.servers: {{ .Values.kafka.bootstrapServers | quote }}
+    schema.history.internal.kafka.topic: schema-history.payments
+    include.schema.changes: "false"
+    snapshot.mode: initial
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnector
+metadata:
+  name: postgres-sink
+  labels:
+    strimzi.io/cluster: {{ .Values.strimzi.connectCluster }}
+    {{- include "payments-cdc.labels" . | nindent 4 }}
+spec:
+  class: io.debezium.connector.jdbc.JdbcSinkConnector
+  tasksMax: 1
+  config:
+    topics: gateway.payments.merchants,gateway.payments.transactions,gateway.payments.refunds
+    connection.url: {{ .Values.strimzi.sink.jdbcUrl | quote }}
+    connection.username: "${secrets:{{ $ns }}/{{ .Values.strimzi.sink.secretRef }}:username}"
+    connection.password: "${secrets:{{ $ns }}/{{ .Values.strimzi.sink.secretRef }}:password}"
+    insert.mode: upsert
+    primary.key.mode: record_key
+    delete.enabled: "true"
+    schema.evolution: basic
+    table.name.format: "${topic}"
+    transforms: route
+    transforms.route.type: org.apache.kafka.connect.transforms.RegexRouter
+    transforms.route.regex: 'gateway\.payments\.(.*)'
+    transforms.route.replacement: "$1"
+{{- end }}

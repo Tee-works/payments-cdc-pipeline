@@ -1,0 +1,102 @@
+# Single-node Kafka (KRaft) and a Kafka Connect cluster, both run by Strimzi.
+# Names match deploy/helm/payments-cdc/values.yaml: the bootstrap service is
+# payments-kafka-bootstrap and the Connect cluster is payments-connect.
+#
+# Sized for a laptop: one broker with replication factor 1. Production would be
+# three brokers, RF 3 and min.insync.replicas 2.
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  labels:
+    strimzi.io/cluster: payments
+spec:
+  replicas: 1
+  roles: [controller, broker]
+  storage:
+    type: ephemeral
+  resources:
+    requests: {cpu: 200m, memory: 640Mi}
+    limits: {memory: 896Mi}
+  jvmOptions:
+    -Xms: 384m
+    -Xmx: 384m
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: payments
+  annotations:
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
+spec:
+  kafka:
+    version: 3.7.1
+    metadataVersion: 3.7-IV4
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      num.partitions: 3
+      default.replication.factor: 1
+      min.insync.replicas: 1
+      offsets.topic.replication.factor: 1
+      transaction.state.log.replication.factor: 1
+      transaction.state.log.min.isr: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnect
+metadata:
+  name: payments-connect
+  annotations:
+    # Connectors are managed as KafkaConnector resources (the Helm chart creates them).
+    strimzi.io/use-connector-resources: "true"
+spec:
+  version: 3.7.1
+  replicas: 1
+  image: payments-connect:local
+  bootstrapServers: payments-kafka-bootstrap:9092
+  config:
+    group.id: payments-connect
+    offset.storage.topic: connect_offsets
+    config.storage.topic: connect_configs
+    status.storage.topic: connect_statuses
+    offset.storage.replication.factor: 1
+    config.storage.replication.factor: 1
+    status.storage.replication.factor: 1
+    # Lets connector configs say ${secrets:<ns>/<secret>:<key>} so credentials
+    # stay in Kubernetes secrets and never appear in the KafkaConnector spec.
+    config.providers: secrets
+    config.providers.secrets.class: io.strimzi.kafka.KubernetesSecretConfigProvider
+  resources:
+    requests: {cpu: 200m, memory: 768Mi}
+    limits: {memory: 1Gi}
+  jvmOptions:
+    -Xms: 512m
+    -Xmx: 512m
+---
+# The secret provider runs as the Connect service account, which may read only
+# the two credential secrets the connectors reference.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: payments-connect-secrets
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [payments-mysql-debezium, payments-cdc-db]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: payments-connect-secrets
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: payments-connect-secrets
+subjects:
+  - kind: ServiceAccount
+    name: payments-connect-connect

@@ -1,0 +1,115 @@
+# Source MySQL and warehouse Postgres for the local cluster. Service names match
+# the defaults in deploy/helm/payments-cdc/values.yaml. Storage is emptyDir:
+# this is a demo, and `make k8s-down` throws it all away anyway.
+#
+# The init SQL is mounted from ConfigMaps that up.sh builds from mysql/init and
+# postgres/init, so the cluster runs exactly the schema docker compose runs.
+#
+# Credentials are not in this file. up.sh creates the secrets referenced below
+# from .env: payments-mysql-root, payments-mysql-debezium, payments-mysql-app,
+# and Terraform creates payments-cdc-db.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-mysql
+  labels: {app: payments-mysql}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: payments-mysql}
+  template:
+    metadata:
+      labels: {app: payments-mysql}
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          args:
+            - --server-id=1
+            - --log-bin=mysql-bin
+            - --binlog-format=ROW
+            - --binlog-row-image=FULL
+            - --gtid-mode=ON
+            - --enforce-gtid-consistency=ON
+            - --default-time-zone=+00:00
+            - --performance-schema=OFF
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: payments-mysql-root, key: password}}
+            # Read by mysql/init/02_users.sh.
+            - name: MYSQL_DEBEZIUM_PASSWORD
+              valueFrom: {secretKeyRef: {name: payments-mysql-debezium, key: password}}
+            - name: MYSQL_APP_PASSWORD
+              valueFrom: {secretKeyRef: {name: payments-mysql-app, key: password}}
+          ports: [{containerPort: 3306}]
+          readinessProbe:
+            exec: {command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$MYSQL_ROOT_PASSWORD\" --silent"]}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 384Mi}
+            limits: {memory: 640Mi}
+          volumeMounts:
+            - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
+            - {name: data, mountPath: /var/lib/mysql}
+      volumes:
+        - name: init
+          configMap: {name: payments-mysql-init}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments-mysql
+spec:
+  selector: {app: payments-mysql}
+  ports: [{port: 3306, targetPort: 3306}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: warehouse-postgres
+  labels: {app: warehouse-postgres}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: warehouse-postgres}
+  template:
+    metadata:
+      labels: {app: warehouse-postgres}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            - {name: POSTGRES_DB, value: warehouse}
+            - {name: TZ, value: UTC}
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: payments-cdc-db, key: username}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: payments-cdc-db, key: password}}
+          ports: [{containerPort: 5432}]
+          readinessProbe:
+            exec: {command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d warehouse"]}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - {name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true}
+            - {name: data, mountPath: /var/lib/postgresql/data}
+      volumes:
+        - name: init
+          configMap: {name: warehouse-postgres-init}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: warehouse-postgres
+spec:
+  selector: {app: warehouse-postgres}
+  ports: [{port: 5432, targetPort: 5432}]

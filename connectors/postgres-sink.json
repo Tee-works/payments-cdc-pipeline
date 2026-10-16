@@ -1,0 +1,20 @@
+{
+  "connector.class": "io.debezium.connector.jdbc.JdbcSinkConnector",
+  "tasks.max": "1",
+  "topics": "gateway.payments.merchants,gateway.payments.transactions,gateway.payments.refunds",
+  "connection.url": "jdbc:postgresql://postgres:5432/warehouse",
+  "connection.username": "${env:PG_USER}",
+  "connection.password": "${env:PG_PASSWORD}",
+  "insert.mode": "upsert",
+  "primary.key.mode": "record_key",
+  "delete.enabled": "true",
+  "schema.evolution": "basic",
+  "table.name.format": "${topic}",
+  "transforms": "route",
+  "transforms.route.type": "org.apache.kafka.connect.transforms.RegexRouter",
+  "transforms.route.regex": "gateway\\.payments\\.(.*)",
+  "transforms.route.replacement": "$1",
+  "errors.tolerance": "none",
+  "errors.log.enable": "true",
+  "errors.log.include.messages": "true"
+}
